@@ -29,8 +29,9 @@ BEGIN {
 	##########
 	IGNORECASE = 1; # STX keywords are case insensitive
 	debug = 0;
-	
-	
+	indentStr = "    ";
+
+
 	#############
 	# Variables #
 	#############
@@ -38,6 +39,7 @@ BEGIN {
 	inFunction = 0;
 	inSub = 0;
 	inType = 0;
+	inClass = 0;
 }
 
 ############
@@ -47,7 +49,7 @@ BEGIN {
 # end of comment (/\*\)$/)
 (inDoxyComment) && (/\*\)$/) {
 	if (debug) print "#Comment end";
-	
+
 	print "*/";
 	inDoxyComment = 0;
 }
@@ -77,7 +79,7 @@ BEGIN {
 #########
 
 # end of type
-(inType) && (/^\s*end_type;/) {
+(inType) && (/^\s*end_type/) {
 	if (debug) print "Type end";
 
 	inType = 0;
@@ -93,82 +95,112 @@ BEGIN {
 	inType = 1;
 }
 
+###########
+# classes #
+###########
+
+# end of class
+(inClass) && (/^\s*end_class/) {
+	if (debug) print "#Class end";
+
+	inClass = 0;
+	print "};\n";
+}
+
+# beginning of class
+(inType) && (!inClass) && (/^\s*(\w+)\s*[:]\s*class/) {
+	# Check if there is a inheritance TODO: Interfaces
+	if (match($0, /[(](.+)[)]/, arr)) {
+		printf("class %s : public %s {\n", $1, arr[1]);
+	} else {
+		printf("class %s {\n", $1);
+	}
+
+	inClass = 1;
+}
+
+# visibility keywords
+(inClass) && (/public/) {
+	print "public:";
+}
+(inClass) && (/private/) {
+	print "private:";
+}
+(inClass) && (/protected/) {
+	print "protected:";
+}
+
+# attributes
+(inClass) && match($0, /^\s*(\w+\s*[:]\s*.+)\s*[;]/, arr) {
+	pair = arr[1];
+	printf("%s%s;\n", indentStr, processPair(pair));
+}
+
 #############
 # functions #
 #############
 # STX: Function DoSomething (Param1 : int, Param2 : int) : int;
 
 # end of function
-(inFunction) && (/^\s*end_function;/) {
+(inFunction) && (/^\s*end_function/) {
 	if (debug) print "#Function end";
- 
+
 	inFunction = 0;
-	
 	print "}\n";
-	
 }
 
 # beginning of function
 !(inFunction) && (/^\s*function\s+\w*[.]?\w+\s*[(].*[)]/) {
-	# Check if it is in Class or not
+	# Check if function is a member
 	if (match($0, /^\s*function\s+(\w+)[.](\w+)\s*[(](.*)[)]/, arr)) {
-		# with class
+		# is member
 		className = arr[1]"::";
 		funcName = arr[2];
-		funcParam = arr[3];
+		funcParameters = arr[3];
 	} else {
 		match($0, /^\s*function\s+(\w+)\s*[(](.*)[)]/, arr)
-		# no class
+		# no member
 		className = "";
 		funcName = arr[1];
-		funcParam = arr[2];
+		funcParameters = arr[2];
 	}
-	
-	# Look for return type TODO: Handle pointers
-	if (match($0, /[:]\s*(\w+)\s*[;]\s*$/, arr)) {
+
+	# Make indent if in class decl.
+	if (inClass) {
+		printf("%s", indentStr);
+	}
+
+	# Look for return type
+	if (match($0, /[:]\s*pointer\s+to\s+(\w+)\s*[;]\s*$/, arr)) {
+		# Is pointer type
+		retType = arr[1]" *";
+	} else if (match($0, /[:]\s*(\w+)\s*[;]\s*$/, arr)) {
+		# No pointer
 		retType = arr[1];
 	} else {
 		retType = "void";
 	}
 
-	if (debug) print "#RetType:", retType, "Class:", className, "Function:", funcName, "#Parameters:", funcParam;
-	
+	if (debug) print "#RetType:", retType, "Class:", className, "Function:", funcName, "#Parameters:", funcParameters;
+
 	# Print return type, name and '('
 	printf("%s %s%s(", retType, className, funcName);
 
-	# Split parameter list at , or :
-	#gsub(/\s+/, "", funcParam); # Remove whitespace
-	nParams = split(funcParam, funcParams, /[,:]/);
-	
-	# Look for pointers
-	replacePointers(funcParams);
-	
-	# Remove whitespace
-	for (i in funcParams) {
-		gsub(/\s+/, "", funcParams[i]);
-	}
+	# Split parameter list at ,
+	nParams = split(funcParameters, pairs, /[,]/);
 
-	# Rearrange parameters
-	for (i in funcParams) {
-		if ((i % 2) == 0) {
-			printf("%s %s", funcParams[i], funcParams[i-1]);
-			if (i >= nParams) { # Check if last Param
-				#print ") {";
-			} else {
-				printf(", ");
-			}
+	# Process all pairs
+	for (i in pairs) {
+		printf("%s", processPair(pairs[i]));
+		if (i < nParams) {
+			printf(", ");
 		}
 	}
-	
-	# For func with no parameters
-	if (nParams == 0) {
-		#print ") {";
-	}
-	
+
 	# Check if part of type declaration
 	if (inType) {
 		# Just a prototype
-		print ");\n";
+		print ");";
 		inFunction = 0;
 	} else {
 		# Code follows
@@ -190,15 +222,15 @@ BEGIN {
 
 # beginning of sub
 (!inSub) && (/^\s*sub\s+\w*[.]?\w+\s*[;]?\s*$/) {
-	# Check if it is in Class or not
+	# Check if member
 	if (match($0, /^\s*sub\s+(\w+)[.](\w+)/, arr)) {
-		# with class
+		# is member
 		className = arr[1]"::";
 		funcName = arr[2];
 		funcParam = arr[3];
 	} else {
 		match($0, /^\s*sub\s+(\w+)/, arr)
-		# no class
+		# no member
 		className = "";
 		funcName = arr[1];
 		funcParam = arr[2];
@@ -206,10 +238,15 @@ BEGIN {
 
 	if (debug) print "#In sub"
 
+	# Make indent if in class decl.
+	if (inClass) {
+		printf("%s", indentStr);
+	}
+
 	# Check if part of type declaration
 	if (inType) {
 		# Just a prototype
-		printf("void %s%s();\n\n", className, funcName);
+		printf("void %s%s();\n", className, funcName);
 		inSub = 0;
 	} else {
 		# Code follows
@@ -221,7 +258,7 @@ BEGIN {
 ########################## Helper Functions ##########################
 
 # Replace the STX 'pointer to' with a '*' and move it to the end of the data type name
-# param params: array containing parameter pairs
+# params: array containing parameter pairs
 function replacePointers(params) {
 	for (i in params) {
 		if (sub("pointer to", "", params[i])) {
@@ -229,5 +266,55 @@ function replacePointers(params) {
 			#if (debug) print "#Found a pointer, inserted *";
 			params[i] = params[i]"*";
 		}
+	}
+}
+
+# Replace the STX array type
+# param: Datatype statement like 'array[6] of int'
+function replaceArray(param) {
+	if (match(param, /array\s*[[](\w+)[]]\s*of\s*(.+)/, arr)) {
+		return arr[2]"["arr[1]"]";
+	} else {
+		return param;
+	}
+}
+
+# Process a STX designator and type pair (myCounter : int) and convert it. Replace array and pointer syntax
+function processPair(pair) {
+	# TODO: 'ref'
+
+	# Remove possible ';'
+	gsub(/[;]/, "", pair);
+
+	# Separate at ':'
+	split(pair, splitted, /[:]/);
+	designator = splitted[1];
+	type = splitted[2];
+
+	# Look for arrays like 'array[6] of int'
+	if (match(type, /array\s*[[](\w+)[]]\s*of\s*(.+)\s*/, arr)) {
+		arrayLength = arr[1];
+		type = arr[2];
+		isArray = 1;
+	} else {
+		isArray = 0;
+	}
+
+	# Look for pointers 'pointer to'
+	if (sub("pointer to", "", type)) {
+		pointer = "*";
+	} else {
+		pointer = "";
+	}
+
+	# Remove whitespace
+	gsub(/\s+/, "", type);
+	gsub(/\s+/, "", designator);
+
+	# Return reassembled pair
+	if (isArray) {
+		return type" "pointer designator"["arrayLength"]"
+	} else {
+		return type" "pointer designator
 	}
 }
