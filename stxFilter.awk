@@ -20,7 +20,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Last change 7. June 2016
+# Last change 8. June 2016
 #----------------------------------------------------------------------------
 
 BEGIN {
@@ -30,16 +30,23 @@ BEGIN {
 	IGNORECASE = 1; # STX keywords are case insensitive
 	debug = 0;
 	indentStr = "    ";
+	taskVarsAsMember = 1; # Treat variables in Tasks as members
 
 
 	#############
 	# Variables #
 	#############
+	currentClassName = "";
 	inDoxyComment = 0;
 	inFunction = 0;
 	inSub = 0;
 	inType = 0;
 	inClass = 0;
+	inInterface = 0;
+	inTask = 0;
+	inVar = 0;
+	inEnum = 0;
+	inStruct = 0;
 }
 
 ############
@@ -49,20 +56,24 @@ BEGIN {
 # end of comment (/\*\)$/)
 (inDoxyComment) && (/\*\)$/) {
 	if (debug) print "#Comment end";
-
-	print "*/";
+	printIndent();
+	print " */";
 	inDoxyComment = 0;
 }
 
-# inside of comment
+# inside of comment (set indent to one space)
 (inDoxyComment) && (/.*/) {
-	print $0;
+	commentLine = $0;
+	sub(/^\s*/, " ", commentLine);
+	printIndent();
+	print commentLine;
 }
 
 # beginning of comment
 !(inDoxyComment) && (/^\s*\(\*\*$/) {
 	if (debug) print "#Comment begin";
 
+	printIndent();
 	print "/**";
 	inDoxyComment = 1;
 }
@@ -74,13 +85,31 @@ BEGIN {
 	print $0;
 }
 
+########
+# vars #
+########
+
+# end of var
+(inVar) && (/^\s*end_var\s*[;]?\s*$/) {
+	if (debug) print "#Var begin";
+					 
+	inVar = 0;
+}
+
+# beginning of var
+!(inVar) && (/^\s*var\s*$/) {
+	if (debug) print "#Var end";
+					 
+	inVar = 1;
+}
+
 #########
 # types #
 #########
 
 # end of type
 (inType) && (/^\s*end_type/) {
-	if (debug) print "Type end";
+	if (debug) print "#Type end";
 
 	inType = 0;
 }
@@ -95,9 +124,54 @@ BEGIN {
 	inType = 1;
 }
 
-###########
-# classes #
-###########
+#########
+# tasks #
+#########
+
+# treat a task like a class
+
+# end of task
+(inTask) && (/^\s*end_task/) {
+	if (debug) print "#Task end";
+
+	inTask = 0;
+	print "};\n";
+}
+
+# in task, print variables as members
+(inTask) && (inVar) && (taskVarsAsMember) && (match($0, /^\s*(\w+\s*[:]\s*.+)\s*[;]/, arr)) {
+	pair = arr[1];
+	printf("%s%s; %s\n", indentStr, processPair(pair), searchMemberDoc($0));
+}
+
+# beginning of task, skip forward declaration (extract task name)
+(!inTask) && (match($0, /^\s*task\s+(\w+)\s*/, arr)) {
+	if (match($0, /forward[;]\s*$/)) {
+		if (debug) print "#Skip task forward decl.";
+	} else {
+		if (debug) print "#Task begin";
+		taskName = arr[0];
+		inTask = 1;
+	
+		# Print a class header with private members
+		printf("class %s {\nprivate:\n", taskName);
+	}
+}
+
+########################
+# classes & interfaces #
+########################
+
+# treat a interface like a class
+
+# end of interface
+(inInterface) && (/^\s*end_interface/) {
+	if (debug) print "#Interface end";
+
+	inClass = 0;
+	inInterface = 0;
+	print "};\n";
+}
 
 # end of class
 (inClass) && (/^\s*end_class/) {
@@ -107,33 +181,116 @@ BEGIN {
 	print "};\n";
 }
 
-# beginning of class
-(inType) && (!inClass) && (/^\s*(\w+)\s*[:]\s*class/) {
-	# Check if there is a inheritance TODO: Interfaces
-	if (match($0, /[(](.+)[)]/, arr)) {
-		printf("class %s : public %s {\n", $1, arr[1]);
+# beginning of class or interface
+(inType) && (!inClass) && ((/^\s*(\w+)\s*[:]\s*class/) || (/^\s*(\w+)\s*[:]\s*interface/)) {
+	currentClassName = $1;
+	if (debug) print "#Class begin, name:", currentClassName;
+
+	# Check if it is a interface
+	if (match($0, /interface/)) {
+		inInterface = 1;
 	} else {
-		printf("class %s {\n", $1);
+		inInterface = 0;
 	}
 
+	# Check if there is a inheritance
+	if (match($0, /[(](.+)[)]/, arr)) {
+		printf("class %s : public %s {\n", currentClassName, arr[1]);
+	} else {
+		printf("class %s {\n", currentClassName);
+	}
+
+	# Make interface members public
+	if (inInterface) {
+		print "public:";
+	}
+	
 	inClass = 1;
 }
 
 # visibility keywords
-(inClass) && (/public/) {
+(inClass) && (/^\s*public/) {
 	print "public:";
 }
-(inClass) && (/private/) {
+(inClass) && (/^\s*private/) {
 	print "private:";
 }
-(inClass) && (/protected/) {
+(inClass) && (/^\s*protected/) {
 	print "protected:";
 }
 
-# attributes
+# attributes (also look for in line documentation
 (inClass) && match($0, /^\s*(\w+\s*[:]\s*.+)\s*[;]/, arr) {
 	pair = arr[1];
-	printf("%s%s;\n", indentStr, processPair(pair));
+	#printf("%s%s;\n", indentStr, processPair(pair));
+	printf("%s%s; %s\n", indentStr, processPair(pair), searchMemberDoc($0));
+}
+
+################
+# enumerations #
+################
+
+# end of enum
+(inEnum) && match($0, /^\s*([^)]*)[)][;]/, arr) {
+	if (debug) print "#Enum end";
+
+	inEnum = 0;
+	literal = arr[1];
+	printf("%s%s %s\n};\n\n", indentStr, literal, searchMemberDoc($0));
+}
+
+
+# in enum
+(inEnum) && match($0, /^\s*([^,]*)[,]/, arr) {
+	literal = arr[1];
+	printf("%s%s, %s\n", indentStr, literal, searchMemberDoc($0));
+}
+
+# beginning of enum
+(inType) && (!inEnum) && match($0, /^\s*(\w+)\s*[:]\s*enum\s*[(](.*)/, arr) {
+	if (debug) print "#Enum begin";
+
+	inEnum = 1;
+	enumName = arr[1];
+	remainingLine = arr[2];
+
+	# Print enum beginning
+	printf("enum %s {\n", enumName);
+
+	# Print remaining line, if containing an enum literal (including documentation, if present)
+	if(match(remainingLine, /^(.+?)[,]/, arr)) {
+		literal = arr[1];
+		printf("%s%s, %s\n", indentStr, literal, searchMemberDoc(remainingLine));
+	}
+}
+
+###########
+# structs #
+###########
+
+# end of struct
+(inStruct) && (/^\s*end_struct/) {
+	if (debug) print "#Struct end";
+
+	inStruct = 0;
+	print "};\n";
+}
+
+
+# in struct
+(inStruct) && match($0, /^\s*([^;]*)[;]/, arr) {
+	printf("%s%s, %s\n", indentStr, processPair(arr[1]), searchMemberDoc($0));
+}
+
+# beginning of struct
+(inType) && (!inStruct) && match($0, /^\s*(\w+)\s*[:]\s*struct/, arr) {
+	if (debug) print "#Struct begin";
+
+	inStruct = 1;
+	structName = arr[1];
+
+	# Print struct beginning
+	printf("struct %s {\n", structName);
 }
 
 #############
@@ -151,24 +308,22 @@ BEGIN {
 
 # beginning of function
 !(inFunction) && (/^\s*function\s+\w*[.]?\w+\s*[(].*[)]/) {
-	# Check if function is a member
+	# Check if function is inside or outside of class definition
 	if (match($0, /^\s*function\s+(\w+)[.](\w+)\s*[(](.*)[)]/, arr)) {
-		# is member
+		# is outside of class definition
 		className = arr[1]"::";
 		funcName = arr[2];
 		funcParameters = arr[3];
 	} else {
 		match($0, /^\s*function\s+(\w+)\s*[(](.*)[)]/, arr)
-		# no member
+		# is inside of class definition, or not a member of any class
 		className = "";
 		funcName = arr[1];
 		funcParameters = arr[2];
 	}
 
 	# Make indent if in class decl.
-	if (inClass) {
-		printf("%s", indentStr);
-	}
+	printIndent();
 
 	# Look for return type
 	if (match($0, /[:]\s*pointer\s+to\s+(\w+)\s*[;]\s*$/, arr)) {
@@ -181,10 +336,23 @@ BEGIN {
 		retType = "void";
 	}
 
+	# Check if function is a constructor
+	if (funcName == currentClassName) {
+		retType = ""; # Constructor has no return type
+	} else {
+		# append space
+		retType = (retType " ");
+	}
+
 	if (debug) print "#RetType:", retType, "Class:", className, "Function:", funcName, "#Parameters:", funcParameters;
+					 
+	# If this is a interface method, make it lika a C++ abstract class (virtual int myFunc() = 0;)
+	if (inInterface) {
+		printf("virtual ");
+	}
 
 	# Print return type, name and '('
-	printf("%s %s%s(", retType, className, funcName);
+	printf("%s%s%s(", retType, className, funcName); # space after retType is appended above
 
 	# Split parameter list at ,
 	nParams = split(funcParameters, pairs, /[,]/);
@@ -197,9 +365,13 @@ BEGIN {
 		}
 	}
 
-	# Check if part of type declaration
-	if (inType) {
-		# Just a prototype
+	# Check if part of type declaration, and if it is a interface method
+	if (inType && inInterface) {
+		# Abstract prototype
+		print ") = 0;";
+		inFunction = 0;
+	} else if (inType) {
+		# Prototype
 		print ");";
 		inFunction = 0;
 	} else {
@@ -214,7 +386,7 @@ BEGIN {
 #######
 # end of sub
 (inSub) && (/^\s*end_sub;/) {
-	if (debug) print "Sub end";
+	if (debug) print "#Sub end";
 
 	inSub = 0;
 	print "}\n";
@@ -236,7 +408,7 @@ BEGIN {
 		funcParam = arr[2];
 	}
 
-	if (debug) print "#In sub"
+	if (debug) print "#Sub begin"
 
 	# Make indent if in class decl.
 	if (inClass) {
@@ -257,31 +429,18 @@ BEGIN {
 
 ########################## Helper Functions ##########################
 
-# Replace the STX 'pointer to' with a '*' and move it to the end of the data type name
-# params: array containing parameter pairs
-function replacePointers(params) {
-	for (i in params) {
-		if (sub("pointer to", "", params[i])) {
-			# Found, so add a '*' at the end
-			#if (debug) print "#Found a pointer, inserted *";
-			params[i] = params[i]"*";
-		}
-	}
-}
-
-# Replace the STX array type
-# param: Datatype statement like 'array[6] of int'
-function replaceArray(param) {
-	if (match(param, /array\s*[[](\w+)[]]\s*of\s*(.+)/, arr)) {
-		return arr[2]"["arr[1]"]";
+# Look for inline member documentation
+function searchMemberDoc(line) {
+	if (match(line, /\(\*\*[<]\s*(.+?)\s*\*\)$/, arr)) {
+		return "/**< "arr[1]" */";
 	} else {
-		return param;
+		return "";
 	}
 }
 
 # Process a STX designator and type pair (myCounter : int) and convert it. Replace array and pointer syntax
 function processPair(pair) {
-	# TODO: 'ref'
+	# TODO: 'any ref'
 
 	# Remove possible ';'
 	gsub(/[;]/, "", pair);
@@ -290,6 +449,8 @@ function processPair(pair) {
 	split(pair, splitted, /[:]/);
 	designator = splitted[1];
 	type = splitted[2];
+
+	if (debug) print "\n#Pair:", pair, "type:", type, "designator:", designator;
 
 	# Look for arrays like 'array[6] of int'
 	if (match(type, /array\s*[[](\w+)[]]\s*of\s*(.+)\s*/, arr)) {
@@ -300,11 +461,26 @@ function processPair(pair) {
 		isArray = 0;
 	}
 
+	# Look for 'index of', is used for pointers to registers, no C++ equivalent
+	sub("index of ", "", type)
+
 	# Look for pointers 'pointer to'
-	if (sub("pointer to", "", type)) {
+	if (sub("pointer to ", "", type)) {
 		pointer = "*";
 	} else {
 		pointer = "";
+	}
+
+	# Look for ref and const
+	if (sub("ref ", "", designator)) {
+		reference = "&";
+	} else {
+		reference = "";
+	}
+	if (sub("const ", "", designator)) {
+		const = "const ";
+	} else {
+		const = "";
 	}
 
 	# Remove whitespace
@@ -313,8 +489,15 @@ function processPair(pair) {
 
 	# Return reassembled pair
 	if (isArray) {
-		return type" "pointer designator"["arrayLength"]"
+		return (const type" "pointer reference designator"["arrayLength"]");
 	} else {
-		return type" "pointer designator
+		return (const type" "pointer reference designator);
+	}
+}
+
+# Prints indent at variable depth (only class so far)
+function printIndent() {
+	if (inClass) {
+		printf("%s", indentStr);
 	}
 }
