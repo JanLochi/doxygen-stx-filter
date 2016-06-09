@@ -20,17 +20,18 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Last change 8. June 2016
+# Last change 9. June 2016
 #----------------------------------------------------------------------------
 
 BEGIN {
 	##########
 	# Config #
 	##########
-	IGNORECASE = 1; # STX keywords are case insensitive
-	debug = 0;
-	indentStr = "    ";
-	taskVarsAsMember = 1; # Treat variables in Tasks as members
+	IGNORECASE = 1;        # STX keywords are case insensitive
+	debug = 0;             # Enable / disable debug output.
+	indentStr = "    ";    # A string which will be used as indent
+	taskVarsAsMember = 1;  # Treat variables in Tasks as members
+	allPreprocessor = 1;   # Print all lines starting with '#' (otherwise only #include)
 
 
 	#############
@@ -45,8 +46,10 @@ BEGIN {
 	inInterface = 0;
 	inTask = 0;
 	inVar = 0;
+	inConst = 0;
 	inEnum = 0;
 	inStruct = 0;
+	inMacro = 0;
 }
 
 ############
@@ -67,6 +70,9 @@ BEGIN {
 	sub(/^\s*/, " ", commentLine);
 	printIndent();
 	print commentLine;
+
+	# No further processing in comment
+	next;
 }
 
 # beginning of comment
@@ -76,13 +82,40 @@ BEGIN {
 	printIndent();
 	print "/**";
 	inDoxyComment = 1;
+
+	# No further processing in comment
+	next;
 }
 
-############
-# includes #
-############
-(/^\s*\x23include/) {
+################
+# preprocessor #
+################
+
+# meaning the statements starting with '#', \x23 is the '#'
+
+# includes
+(!allPreprocessor) && (/^\s*\x23include/) {
 	print $0;
+	next; # no further pattern matching on this line
+}
+
+# every line with '#', and multiple line macros
+(allPreprocessor) && ((/^\s*\x23/) || (inMacro)) {
+	line = $0;
+
+	# Replace (** and *) for inline documentation
+	sub(/[(][*][*]/, "/**", line);
+	sub("*)", "*/", line);
+
+	print line;
+	
+	# Macro spans multiple lines?
+	if (match($0, /[\\]\s*$/)) {
+		inMacro = 1;
+	} else {
+		inMacro = 0;
+	}
+	next; # no further pattern matching on this line
 }
 
 ########
@@ -90,17 +123,59 @@ BEGIN {
 ########
 
 # end of var
-(inVar) && (/^\s*end_var\s*[;]?\s*$/) {
-	if (debug) print "#Var begin";
-					 
+(inVar) && (/^\s*end_var/) {
+	if (debug) print "#Var end";
+
 	inVar = 0;
 }
 
+# print global vars
+(inVar) && (!inFunction) && (!inTask) && match($0, /^\s*(\w+)\s*[:]\s*([^;]+)[;]/, arr) {
+	varName = arr[1];
+	varType = arr[2];
+
+	# Move constructor paramters to the varName
+	if (match($0, /([(].+[)])/, arr)) {
+		sub(/[(].+[)]/, "", varType); # strip from type
+		varName = varName arr[1]; # Append to name
+	}
+
+	# print the constants with the C++ auto keyword and inline documentation
+	printf("%s %s; %s\n", varType, varName, searchMemberDoc($0));
+}
+
 # beginning of var
-!(inVar) && (/^\s*var\s*$/) {
-	if (debug) print "#Var end";
-					 
+(!inVar) && (!inType) && (/^\s*var/) {
+	if (debug) print "#Var begin";
+
 	inVar = 1;
+}
+
+#############
+# constants #
+#############
+
+# end of const
+(inConst) && (/^\s*end_const\s*[;]?\s*$/) {
+	if (debug) print "#Const end";
+
+	inConst = 0;
+}
+
+# print global consts
+(inConst) && (!inFunction) && match($0, /^\s*(\w+)\s*[=]\s*([^;]+)[;]/, arr) {
+	constName = arr[1];
+	constValue = arr[2];
+
+	# print the constants with the C++ auto keyword and inline documentation
+	printf("const auto %s = %s; %s\n", constName, constValue, searchMemberDoc($0));
+}
+
+# beginning of const
+(!inConst) && (!inType) && (/^\s*const\s*$/) {
+	if (debug) print "#Const begin";
+
+	inConst = 1;
 }
 
 #########
@@ -114,14 +189,19 @@ BEGIN {
 	inType = 0;
 }
 
-# inside of type
-
-
 # beginning of type
 !(inType) && (/^\s*type/) {
 	if (debug) print "#Type begin";
 
 	inType = 1;
+}
+
+# look for typedefs inside of type
+(inType) && (!inClass) && (!inEnum) && (!inStruct) && match($0, /^\s*(\w+)\s*[:]\s*([^;]+)\s*[;]/, arr) {
+	if (debug) print "#Typedef found";
+	pair = arr[1]" : "arr[2];
+
+	printf("typedef %s;\n", processPair(pair));
 }
 
 #########
@@ -150,7 +230,7 @@ BEGIN {
 		if (debug) print "#Skip task forward decl.";
 	} else {
 		if (debug) print "#Task begin";
-		taskName = arr[0];
+		taskName = arr[1];
 		inTask = 1;
 	
 		# Print a class header with private members
@@ -279,7 +359,7 @@ BEGIN {
 
 # in struct
 (inStruct) && match($0, /^\s*([^;]*)[;]/, arr) {
-	printf("%s%s, %s\n", indentStr, processPair(arr[1]), searchMemberDoc($0));
+	printf("%s%s; %s\n", indentStr, processPair(arr[1]), searchMemberDoc($0));
 }
 
 # beginning of struct
@@ -394,7 +474,7 @@ BEGIN {
 
 # beginning of sub
 (!inSub) && (/^\s*sub\s+\w*[.]?\w+\s*[;]?\s*$/) {
-	# Check if member
+	# Check if outside class
 	if (match($0, /^\s*sub\s+(\w+)[.](\w+)/, arr)) {
 		# is member
 		className = arr[1]"::";
@@ -402,7 +482,7 @@ BEGIN {
 		funcParam = arr[3];
 	} else {
 		match($0, /^\s*sub\s+(\w+)/, arr)
-		# no member
+		# check if inside class or without class
 		className = "";
 		funcName = arr[1];
 		funcParam = arr[2];
@@ -415,14 +495,21 @@ BEGIN {
 		printf("%s", indentStr);
 	}
 
+	# Returntype is void or nothing for constructors
+	if (currentClassName == funcName) {
+		retType = "";
+	} else {
+		retType = "void ";
+	}
+
 	# Check if part of type declaration
 	if (inType) {
 		# Just a prototype
-		printf("void %s%s();\n", className, funcName);
+		printf("%s%s%s();\n", retType, className, funcName);
 		inSub = 0;
 	} else {
 		# Code follows
-		printf("void %s%s() {\n", className, funcName);
+		printf("%s%s%s() {\n", retType, className, funcName);
 		inSub = 1;
 	}
 }
@@ -431,7 +518,7 @@ BEGIN {
 
 # Look for inline member documentation
 function searchMemberDoc(line) {
-	if (match(line, /\(\*\*[<]\s*(.+?)\s*\*\)$/, arr)) {
+	if (match(line, /\(\*\*[<]\s*(.+)\s*\*\)$/, arr)) {
 		return "/**< "arr[1]" */";
 	} else {
 		return "";
