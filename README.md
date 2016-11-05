@@ -1,17 +1,17 @@
 Doxygen-STX-Filter
 ==================
 
-Doxygen filter script for STX, used on Jetter PLCs.\
-See <https://www.jetter.de> for more information about the STX language.\
+Doxygen filter script for STX, used on Jetter PLCs.  
+See <https://www.jetter.de> for more information about the STX language.  
 See <http://www.stack.nl/~dimitri/doxygen/helpers.html> for more information
 about Doxygen Filters.
 
 Install
 -------
-**Linux:**\
+**Linux:**  
 Put the `stxFilter.awk` script somewhere in your PATH, e.g. `/usr/local/bin`
 
-**Windows:**\
+**Windows:**  
 Get the GNU utilities from <http://unxutils.sourceforge.net/> to run awk scripts.
 
 Doxyfile Configuration
