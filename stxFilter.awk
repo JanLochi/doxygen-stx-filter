@@ -4,7 +4,7 @@
 #
 # Inspired by the work of Mathias Henze on the Visual Basic filter
 #
-# Copyright (c) 2015 Jan Lochmatter, jan@janlochmatter.ch
+# Copyright (c) 2016 Jan Lochmatter  <jan@janlochmatter.ch>
 # Bern University of Applied Sciences Engineering and Information Technology
 #
 # This program is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Last change 9. June 2016
+# Last change 27. June 2016
 #----------------------------------------------------------------------------
 
 BEGIN {
@@ -50,6 +50,16 @@ BEGIN {
 	inEnum = 0;
 	inStruct = 0;
 	inMacro = 0;
+}
+
+#################
+# end statement #
+#################
+
+# no further processing of the input file
+(/[!]END[_]FILTER[!]/) {
+	if (debug) print "#End statement '!END_FILTER!' found";
+	exit 0;
 }
 
 ############
@@ -108,7 +118,7 @@ BEGIN {
 	sub("*)", "*/", line);
 
 	print line;
-	
+
 	# Macro spans multiple lines?
 	if (match($0, /[\\]\s*$/)) {
 		inMacro = 1;
@@ -134,8 +144,11 @@ BEGIN {
 	varName = arr[1];
 	varType = arr[2];
 
+	# Replac " at " with "_at_"
+	sub(/\s*at\s*/, "_at_", varType);
+
 	# Move constructor paramters to the varName
-	if (match($0, /([(].+[)])/, arr)) {
+	if (match($0, /([(][^*]+[)])/, arr)) {
 		sub(/[(].+[)]/, "", varType); # strip from type
 		varName = varName arr[1]; # Append to name
 	}
@@ -232,7 +245,7 @@ BEGIN {
 		if (debug) print "#Task begin";
 		taskName = arr[1];
 		inTask = 1;
-	
+
 		# Print a class header with private members
 		printf("class %s {\nprivate:\n", taskName);
 	}
@@ -275,6 +288,9 @@ BEGIN {
 
 	# Check if there is a inheritance
 	if (match($0, /[(](.+)[)]/, arr)) {
+		# Insert public after ','
+		gsub(/[,]/, ", public ", arr[1]);
+
 		printf("class %s : public %s {\n", currentClassName, arr[1]);
 	} else {
 		printf("class %s {\n", currentClassName);
