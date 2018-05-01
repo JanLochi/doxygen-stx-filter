@@ -4,7 +4,7 @@
 #
 # Inspired by the work of Mathias Henze on the Visual Basic filter
 #
-# Copyright (c) 2016 Jan Lochmatter  <jan@janlochmatter.ch>
+# Copyright (c) 2018 Jan Lochmatter, jan@janlochmatter.ch
 # Bern University of Applied Sciences Engineering and Information Technology
 #
 # This program is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Last change 27. June 2016
+# Last change 30. April 2018
 #----------------------------------------------------------------------------
 
 BEGIN {
@@ -38,6 +38,8 @@ BEGIN {
 	# Variables #
 	#############
 	currentClassName = "";
+	enumInstance = "";
+	enumTypeName = "";
 	inDoxyComment = 0;
 	inFunction = 0;
 	inSub = 0;
@@ -300,7 +302,7 @@ BEGIN {
 	if (inInterface) {
 		print "public:";
 	}
-	
+
 	inClass = 1;
 }
 
@@ -332,7 +334,15 @@ BEGIN {
 
 	inEnum = 0;
 	literal = arr[1];
-	printf("%s%s %s\n};\n\n", indentStr, literal, searchMemberDoc($0));
+
+	printf("%s%s %s\n};\n", indentStr, literal, searchMemberDoc($0));
+
+	# Check for in class enum and print intance
+	if (length(enumInstance) > 0) {
+		printf("%s %s;\n\n", enumTypeName, enumInstance);
+	} else {
+		print "\n";
+	}
 }
 
 
@@ -342,16 +352,38 @@ BEGIN {
 	printf("%s%s, %s\n", indentStr, literal, searchMemberDoc($0));
 }
 
-# beginning of enum
+# beginning of enum in type
 (inType) && (!inEnum) && match($0, /^\s*(\w+)\s*[:]\s*enum\s*[(](.*)/, arr) {
 	if (debug) print "#Enum begin";
 
 	inEnum = 1;
 	enumName = arr[1];
 	remainingLine = arr[2];
+	enumInstance = "";
 
 	# Print enum beginning
-	printf("enum %s {\n", enumName);
+	printf("enum class %s {\n", enumName);
+
+	# Print remaining line, if containing an enum literal (including documentation, if present)
+	if(match(remainingLine, /^(.+?)[,]/, arr)) {
+		literal = arr[1];
+		printf("%s%s, %s\n", indentStr, literal, searchMemberDoc(remainingLine));
+	}
+}
+
+# beginning of enum in class
+(inClass) && (!inEnum) && match($0, /^\s*(\w+)\s*[:]\s*enum\s*(\w+)\s*[(](.*)/, arr) {
+	if (debug) print "#Enum begin";
+
+	inEnum = 1;
+	enumInstance = arr[1];
+	enumName = arr[2];
+	remainingLine = arr[3];
+
+	enumTypeName = enumName;
+
+	# Print enum beginning
+	printf("enum class %s {\n", enumName);
 
 	# Print remaining line, if containing an enum literal (including documentation, if present)
 	if(match(remainingLine, /^(.+?)[,]/, arr)) {
@@ -441,7 +473,7 @@ BEGIN {
 	}
 
 	if (debug) print "#RetType:", retType, "Class:", className, "Function:", funcName, "#Parameters:", funcParameters;
-					 
+
 	# If this is a interface method, make it lika a C++ abstract class (virtual int myFunc() = 0;)
 	if (inInterface) {
 		printf("virtual ");
