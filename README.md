@@ -24,7 +24,6 @@ Change the following parameters in your Doxyfile:
 
 Possible improvements
 ---------------------
-* Handle the `virtual` keyword
 * Preserve line number integrity (for source browser)
 * Multiple inheritance
 * Preserve function calls in code (for call graph)

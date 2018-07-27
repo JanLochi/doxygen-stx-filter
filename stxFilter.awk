@@ -20,7 +20,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
-# Last change 30. April 2018
+# Last change 27. July 2018
 #----------------------------------------------------------------------------
 
 BEGIN {
@@ -616,6 +616,12 @@ function processPair(pair) {
 		const = "const ";
 	} else {
 		const = "";
+	}
+
+	# Check for missing type -> void pointer (any ref)
+	if (length(type) == 0) {
+		type = "void *";
+		reference = "";
 	}
 
 	# Remove whitespace
